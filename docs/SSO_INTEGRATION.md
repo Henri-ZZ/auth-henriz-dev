@@ -202,31 +202,27 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 ## 6. 登出与撤销
 
 - **只退出当前 app**：清掉本地 session，保留中央 session —— 下次访问会无感 SSO 直接回来。适合「切换账号」之外的普通场景。
-- **同时退出中央登录**（`Sign out` 按钮推荐这么做）：中央 session 的 Cookie 只属于 `auth.henriz.dev`，跨站 POST 调不到它的 `/api/logout`，必须把浏览器带过去：
+- **同时退出中央登录**（`Sign out` 按钮推荐这么做）：中央 session 的 Cookie 只属于 `auth.henriz.dev`，跨站清不掉，所以把浏览器**整页**带过去就行：
 
 ```ts
 // app/api/auth/logout/route.ts（app 侧）
 await clearLocalSession();
-const back = `${process.env.APP_ORIGIN}/login?loggedOut=1`; // 必须是已注册 client 的 origin
-return Response.json({
-  ok: true,
-  redirectTo: `${process.env.HENRIZ_AUTH_BASE_URL}/logout?redirect_uri=${encodeURIComponent(back)}`,
-});
+return Response.json({ ok: true, redirectTo: `${process.env.HENRIZ_AUTH_BASE_URL}/logout` });
 ```
 
 ```ts
 // 客户端按钮
 const { redirectTo } = await (await fetch("/api/auth/logout", { method: "POST" })).json();
-window.location.assign(redirectTo);
+window.location.assign(redirectTo);   // 整页跳转，不是让 fetch 去跟随
 ```
 
-流程与约束：
+`GET /logout` **访问即退出**：revoke 中央 session、清 Cookie，然后 303 到 `/signed-out` 显示「已退出登录」。没有确认步骤，也不回跳。
 
-1. `GET /logout?redirect_uri=…` 只是确认页（GET 不改变状态，确认按钮走 POST + CSRF）；
-2. `redirect_uri` 只接受同源相对路径，或**已注册且 active 的 client 的 origin**，其它一律退回 auth 的 `/login`（不会变成开放重定向）；
-3. 确认后中央 session 被 revoke，浏览器 303 回到 `redirect_uri`。
+三条硬约束：
 
-⚠️ **别让 app 的退出只清本地 Cookie**：如果 app 的登录页会自动跳 SSO（本文两种模式都建议自动跳），用户会立刻被静默签回，看起来像「退出失败」。所以回跳地址带上 `?loggedOut=1` 之类的标记，让登录页显示终态提示而不是再跳一次 SSO。
+- **用整页跳转，别用 `fetch` 去跟随**：`/logout` 会整页导航到 `/signed-out`；如果跨域去 `fetch` 跟随跳转，会被 CSP `connect-src 'self'` 拦掉，控制台只报 `Failed to fetch`，用户以为退出失败（其实服务端已经退了）。
+- **不要回跳原 app**：app 的登录页会自动跳 SSO，回跳等于立刻又推进一轮授权（刚点完退出就被签回来）。终态留在 auth 域名即可。
+- **别只清本地 Cookie 就完事**：中央 session 还在的话，app 只要跳到登录页就会被静默签回。
 
 - 中央退出**不会**自动使各后台已建立的本地 session 失效（没有 back-channel logout），所以 UI 文案不要承诺「退出所有设备」；本地 session 按各自 TTL 过期。
 - 需要立刻失效所有后台时：在 `/security` 撤销该 Admin 的中央 sessions（并递增 `sessionVersion`），各后台按本地 TTL 过期或做一次重新认证。
@@ -242,6 +238,8 @@ window.location.assign(redirectTo);
 | `/api/token` 400 `invalid_grant` | code 过期/已使用、`redirect_uri` 与授权时不同、PKCE verifier 不匹配、client secret 错误 —— 故意统一成同一个错误 |
 | 换了 secret 后立刻 401 | 没用 `--rotate`（宽限 24h），或 app 没部署新 secret 且宽限已过 |
 | 回调报 `state_mismatch` | 用户在别的标签页发起了新的登录（事务 Cookie 被覆盖），或 returnTo 被篡改 |
+| 点退出后控制台报 `connect-src 'self'` / `Failed to fetch` | 用 `fetch(..., { redirect: "follow" })` 去访问了会整页跳转的退出地址。退出用整页跳转（`window.location.assign`）或普通链接（见 §6） |
+| 点退出后立刻又被签回 | 中央 session 没死：app 只清了本地 Cookie，或没把浏览器带到 auth 的 `/logout` |
 
 ## 8. 上线检查清单
 

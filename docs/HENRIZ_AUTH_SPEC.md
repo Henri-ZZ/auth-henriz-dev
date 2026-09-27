@@ -421,8 +421,10 @@ grant_type=authorization_code&code=...&redirect_uri=...&code_verifier=...
 ## 18. 退出与撤销
 
 - **退出当前应用**：仅 revoke/删除该 app 的本地 session，不影响中央 session 或其他 app。
-- **中央退出**：浏览器 POST `https://auth.henriz.dev/api/logout`（CSRF 防护）revoke 当前中央 session 并清中央 Cookie；已建立的 app sessions 默认继续有效，直至各自过期/退出。
-- **RP-initiated logout**：app 无法跨站调 `/api/logout`（中央 Cookie 只属于 auth origin），因此由 app 把浏览器带到 `GET https://auth.henriz.dev/logout?redirect_uri=<app 地址>`。该页只做确认渲染，确认按钮仍走 POST + CSRF；`redirect_uri` 仅接受同源相对路径或已注册 active client 的 origin，其它一律退回 `/login`，避免开放重定向。**若 app 的登录页会自动跳 SSO，退出后必须落到不自动跳转的终态**（例如 `?loggedOut=1`），否则用户会被静默签回。
+- **中央退出**：浏览器访问 `https://auth.henriz.dev/logout`，**GET 即执行**：revoke 当前中央 session、清中央 Cookie，然后 303 到 `/signed-out` 展示「已退出登录」。已建立的 app sessions 默认继续有效，直至各自过期/退出。
+- **app 侧退出**：app 清掉自己的本地 session，然后把浏览器**整页**带到 `https://auth.henriz.dev/logout` 即可（普通链接或 `window.location.assign`）；不要用 `fetch` 调接口，也不要回跳 app。
+- **退出后不回跳原 app**：app 的登录页会自动跳 SSO，回跳等于立刻把用户又推进一轮授权，看起来像退出失败；终态留在 auth 域名。
+- **已知取舍**：GET 退出可被第三方以图片/链接触发（强制登出 CSRF），代价只是用户需要重新认证，该路由不暴露其它能力，接受此风险以换取「一条链接/一次整页跳转」的简单退出。
 - **退出所有设备**：revoke Admin 所有中央 sessions；同时递增 `Admin.sessionVersion`。各 app 可在下次 SSO 或可选 back-channel revocation 时失效本地 session。
 - v1 若不实现可靠 back-channel logout，UI 必须明确说明“中央退出不会自动退出已打开的后台”。高安全 app 可用短本地 TTL，并定期调用受认证 introspection/revocation version endpoint。
 - Passkey revoke 默认不强制撤销所有 session；UI 提供勾选项。若因设备丢失而 revoke，应默认撤销全部中央 sessions。
@@ -602,8 +604,8 @@ model AuditLog {
 | DELETE | `/api/totp` | session + Passkey step-up + CSRF | 关闭 |
 | GET | `/api/sessions` | session | 列出中央 sessions |
 | POST | `/api/sessions/revoke` | session + step-up + CSRF | 撤销一个/全部 |
-| GET | `/logout` | 无 | RP-initiated logout 确认页，可带 `redirect_uri` |
-| POST | `/api/logout` | session + CSRF | 中央退出，可带 `?redirect_uri=` 回跳 |
+| GET | `/logout` | 无 | 中央退出：revoke + 清 Cookie，303 到 `/signed-out` |
+| GET | `/signed-out` | 无 | 「已退出登录」静态页 |
 | GET | `/api/health` | 无 | 只返回 liveness，不泄露依赖详情 |
 
 所有 JSON/body 使用 Zod 等 runtime schema 严格解析、限制长度、拒绝未知字段（兼容字段另行版本化）。
@@ -677,7 +679,7 @@ return redirect(tx.validatedRelativeReturnPath, 303);
 
 ## 23. CSRF、XSS 与协议防护
 
-- 所有状态变更 endpoint 仅 POST/PUT/PATCH/DELETE；验证 `Origin` 精确为 `https://auth.henriz.dev`，并使用 session-bound synchronizer CSRF token。SameSite 只是纵深防御。
+- 所有状态变更 endpoint 仅 POST/PUT/PATCH/DELETE；验证 `Origin` 精确为 `https://auth.henriz.dev`，并使用 session-bound synchronizer CSRF token。SameSite 只是纵深防御。唯一例外是 `GET /logout`（见 §18）：它只做登出，强制登出的代价仅为重新认证。
 - `/authorize` 可 GET，但只创建短期 code；client callback 的 state 必须防 login CSRF。不得通过 GET 修改凭据或 logout。
 - React 默认 escaping；禁止渲染不可信 HTML。Passkey 名称、client 名称与错误文本按普通文本输出。
 - CSP 使用 nonce：`default-src 'self'; script-src 'self' 'nonce-...'; style-src 'self' 'nonce-...'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`。按 Next.js 实际需要最小调整，生产禁用 `unsafe-eval`。
