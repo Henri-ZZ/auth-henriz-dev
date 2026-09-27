@@ -21,7 +21,20 @@ CLIENTS_JSON='[{"clientId":"edit-page-admin_xxx","name":"Edit Page","secret":"hi
 pnpm db:seed
 ```
 
-The seed script refuses to run after an Admin exists and never prints secrets. Visit `/recovery`, verify the existing TOTP, and immediately register two independent Passkeys.
+The seed script refuses to run after an Admin exists and never prints secrets. Sign in at `/login` (Passkey or 6-digit code, either one) or `/recovery`, then immediately register two independent Passkeys.
+
+The TOTP seed must be Base32 with at least 128 bits (26+ characters); legacy 80-bit seeds (16 characters) are rejected by `otplib` with `SecretTooShortError` and can never verify.
+
+## TOTP reset (seed lost or too short)
+
+`pnpm db:reset-totp --dry-run` prints the current Admin state without writing anything. Drop the flag to apply the reset: it replaces the TOTP credential, revokes every central session, clears pending challenges/codes, and sets the Admin back to `BOOTSTRAP_REQUIRED` when no Passkey remains.
+
+```sh
+pnpm db:reset-totp                              # generates a new 160-bit seed and prints an otpauth:// URI
+ADMIN_TOTP_SECRET='<base32 secret or otpauth:// URI>' pnpm db:reset-totp   # keep your own seed, nothing printed
+```
+
+Enroll the new seed in the authenticator app, sign in at `/login` or `/recovery`, then register two independent Passkeys in `/security`. Lost Passkeys **and** TOTP remain an offline, human-verified recovery (spec §14.3).
 
 ## Checks
 

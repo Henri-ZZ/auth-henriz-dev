@@ -12,7 +12,7 @@
 核心决策：
 
 - 日常主认证为 Passkey/WebAuthn；同一 Admin 可注册多个独立凭据（Mac、iPhone、备用安全密钥等），不要求 iCloud 同步。
-- 现有 TOTP 保留为 bootstrap/recovery credential，不作为默认登录入口。
+- 登录允许**任选** Passkey 或现有 TOTP（6 位动态码）：两者都建立同等级别的中央 session，都可继续待处理的 authorize transaction 并完成 SSO 登录。Passkey 仍是首选（抗钓鱼、不依赖共享密钥）；TOTP 同时承担 bootstrap 与恢复职责，但属于可被实时钓鱼/中继的共享密钥凭据，因此凭据管理与高风险操作仍要求 Passkey step-up（§14.2）。
 - 中央认证域仅设置 host-only Cookie；绝不设置 `Domain=.henriz.dev`。
 - 各后台拥有自己的独立 HttpOnly session。没有本地 session 时跳转中央 `/authorize`。
 - 中央 session 有效时直接签发短期、单次 authorization code；否则先完成认证再签发。
@@ -44,7 +44,7 @@ Vercel 官方文档（最后更新 2026-09-14）说明 Hobby 面向个人、非�
 
 - 一个 Admin 身份登录多个自有后台。
 - Passkey-first，支持多设备、多凭据独立注册、命名、查看最后使用时间与撤销。
-- 保留 TOTP 作为首个 Passkey bootstrap 和 Passkey 全部不可用时的恢复路径。
+- Passkey 与 TOTP 均可独立完成登录（`/login` 上任选），并保留 TOTP 作为首个 Passkey bootstrap 和 Passkey 全部不可用时的恢复路径。
 - 已有中央 session 时，在后台之间跳转可无感完成。
 - 每个后台隔离 session；一个后台 Cookie 泄露不能直接作为其他后台或中央认证 Cookie 使用。
 - code 短期、单次使用、绑定 client/redirect URI/PKCE，并能抗重放。
@@ -58,7 +58,7 @@ Vercel 官方文档（最后更新 2026-09-14）说明 Hobby 面向个人、非�
 - 不让浏览器或后台直接读取中央 session。
 - 不使用跨子域共享 Cookie，不在 URL 中传递 session/token/secret。
 - v1 不支持 native app、跨顶级域 RP、企业目录或复杂 RBAC。
-- TOTP 不是默认日常登录方式，也不是降低 step-up 要求的捷径。
+- TOTP 可作为日常登录方式之一，但不得降低 step-up 要求：凭据管理与高风险操作仍以 Passkey 为必需条件。允许 TOTP 登录是本方案的显式取舍，风险与补偿控制见 §5.2 与 §13.3。
 
 ## 5. Threat model
 
@@ -77,6 +77,7 @@ Vercel 官方文档（最后更新 2026-09-14）说明 Hobby 面向个人、非�
 - 数据库只读泄露：读取 session/code 摘要、TOTP 密文和 WebAuthn public key。
 - 日志/监控泄露：URL、header、secret 被意外记录。
 - 设备丢失：某个 Passkey 可被本机解锁机制使用。
+- 实时钓鱼/中继：TOTP 动态码不绑定 origin，钓鱼页面可把用户输入的动态码转发到真实服务换取中央 session，进而完成 SSO 拿到后台 code。补偿控制：单 time-step 防重放、连续失败锁定（§13.2）、全量审计与快速 session 撤销（§18）；接受该风险的依据是本服务仅服务于所有者本人，且 Passkey 始终是首选入口。
 
 ### 5.3 信任边界与假设
 
@@ -124,13 +125,17 @@ sequenceDiagram
   alt central session valid
     H->>D: create one-time code (hashed, <=60s)
   else no/expired session
-    H-->>B: minimal Passkey login page
+    H-->>B: minimal login page (Passkey 或动态码，任选)
     B->>H: authentication options
     H->>D: store short-lived challenge
     H-->>B: PublicKeyCredentialRequestOptionsJSON
     B->>B: navigator.credentials.get()
     B->>H: authentication response
     H->>D: verify, update counter, create central session + code
+  else 动态码（TOTP）
+    B->>H: POST /api/totp/verify
+    H->>D: 校验 time-step/限速，复用待处理 transaction
+    H->>D: create central session + code
   end
   H-->>B: 302 exact redirect_uri?code=...&state=...
   B->>A: GET /auth/callback?code&state
@@ -190,9 +195,10 @@ henriz-auth/
 
 ### 9.1 `/login`
 
-- Henri Z 标识、一个主按钮“使用 Passkey 登录”。
+- Henri Z 标识、主按钮“使用 Passkey 登录”；下方以分隔线“或”接 6 位动态码输入与“使用动态码登录”按钮。
+- 两种方式**任选其一**即可登录，不做先后强制；都走同一个待处理 authorize transaction 收尾逻辑。
 - 浏览器调用 `navigator.credentials.get()`；失败只显示可理解的通用错误。
-- 次级链接“Passkey 不可用？使用恢复方式”，进入 `/recovery`。
+- `/recovery` 保留同一动态码表单与恢复说明，供直接访问或书签使用。
 - 不显示用户名枚举信息；单管理员可用 discoverable credential/usernameless flow。
 - 登录成功继续原始、服务器保存且已校验的 authorize transaction；禁止信任任意 `returnTo`。
 
@@ -207,7 +213,7 @@ henriz-auth/
 ### 9.3 `/recovery`
 
 - 输入 6 位 TOTP；不泄露凭据是否存在。
-- 成功只建立受限、短时 recovery/step-up 状态，立即引导注册新 Passkey。
+- 与 `/login` 的动态码输入共用同一 endpoint 与文案组件；验证成功建立 `authMethod=TOTP` 的中央 session，并立即引导注册新 Passkey。
 - 若仍有 Passkey，TOTP 登录完成后也建议使用 Passkey 再确认高风险操作。
 - 不提供电子邮件自动恢复。TOTP 也丢失时走离线人工灾难恢复流程。
 
@@ -283,6 +289,14 @@ export const webauthnConfig = {
 - Serverless 内存限流不是安全边界。v1 可用数据库事务表/计数列；流量增长后使用托管原子限流存储。
 - 反向代理 IP 只信任 Vercel 提供的受控 header 语义，不盲目信任客户端 `X-Forwarded-For`。
 
+### 13.3 作为登录入口
+
+- `/login` 与 `/recovery` 共用 `POST /api/totp/verify`：验证成功后建立 `authMethod=TOTP` 的中央 session，并继续待处理的 authorize transaction（存在时直接回跳 client callback，否则落到 `/security`）。
+- TOTP 登录与 Passkey 登录在会话层面等价：同一 idle/absolute TTL、同一 CSRF 与 Cookie 策略；差异只体现在 `authMethod` 记录、审计事件和 UI 提示。
+- 前提是 §13.2 的防重放与限速/锁定生效：连续失败 10 次锁定 30 分钟，成功后清零失败计数。
+- 持有 Passkey 时，凭据管理与高风险操作仍需 Passkey step-up（§14.2）；TOTP 会话不能自证身份完成这些操作。
+- 该设计把 TOTP 从“仅恢复”提升为“可登录”，因此 TOTP seed 的保密等级等同登录口令：seed 泄露等于账号可被接管，处理方式见 §30.2。
+
 ## 14. Bootstrap、step-up 与 recovery
 
 ### 14.1 首次 bootstrap
@@ -302,14 +316,14 @@ export const webauthnConfig = {
 | revoke Passkey | Passkey 优先；否则 TOTP | 5 分钟 |
 | 修改/关闭 TOTP | **Passkey 必需**（正常情况） | 5 分钟 |
 | 重置 TOTP（旧 seed 丢失） | Passkey + 明确确认 | 5 分钟 |
-| 撤销所有 sessions | Passkey 优先；recovery 模式可 TOTP | 5 分钟 |
-| 普通 SSO authorize | 有效中央 session | 按 session 策略 |
+| 撤销所有 sessions | Passkey 优先；`authMethod=TOTP` 的会话可 TOTP | 5 分钟 |
+| 普通 SSO authorize | 有效中央 session（Passkey 或 TOTP 登录均可） | 按 session 策略 |
 
 step-up 状态保存在服务端 session 中：`authMethod`、`authenticatedAt`、`assurance`。不能由客户端参数声明。
 
 ### 14.3 Recovery
 
-- 有 TOTP：验证后建立最多 10 分钟的受限 recovery session，只能注册 Passkey、查看/撤销 session、退出；完成新 Passkey 注册后轮换为正常 session。
+- 有 TOTP：在 `/login` 或 `/recovery` 输入动态码即可登录 —— 建立与 Passkey 登录同等级别的中央 session（`authMethod=TOTP`），同样可完成 SSO authorize；随后应立即注册新 Passkey。
 - 有其他 Passkey：直接使用它登录并添加新凭据。
 - Passkey 全失且 TOTP 全失：无在线自动绕过。使用离线 runbook：确认操作者身份和控制权、进入维护窗口、备份数据库、通过受审计 CLI 创建一次性 bootstrap token；完成后立刻注册两个 Passkey、重置 TOTP、撤销全部历史 session/client code。该流程的风险由所有者承担。
 
@@ -363,6 +377,7 @@ GET /authorize?response_type=code
 - state 由 app 生成至少 32 bytes，绑定发起浏览器 session、原始目标路径和 10 分钟过期；callback 先恒定时间比较再消费。
 - PKCE S256 必需，即使 client 是 confidential server app；`code_verifier` 只保存在 app 的服务端 transaction/session 中。
 - 未登录时，authorize 参数保存为服务端 transaction；登录完成只按 transaction 继续，不接受新的客户端 `returnTo`。
+- 已有中央 session 且 Admin 状态为 `ACTIVE` 时直接签发 code，**不区分登录方式**：Passkey 登录（`/api/webauthn/authenticate/verify`）与 TOTP 登录（`/api/totp/verify`）使用同一 `finishPendingAuthorize` 收尾逻辑，`authMethod` 只记录在 session/审计/断言中，不改变 code 交换规则。
 
 ### 17.2 Code 生成与跳转
 
@@ -577,7 +592,7 @@ model AuditLog {
 | POST | `/api/webauthn/register/verify` | session + challenge + CSRF | 写入凭据 |
 | PATCH | `/api/passkeys/:id` | session + CSRF | 改名 |
 | DELETE | `/api/passkeys/:id` | session + step-up + CSRF | revoke |
-| POST | `/api/totp/verify` | recovery transaction | TOTP 验证 |
+| POST | `/api/totp/verify` | 无（限速 + 失败锁定） | TOTP 验证：建立中央 session 或继续 authorize transaction |
 | PUT | `/api/totp` | session + Passkey step-up + CSRF | 重置/启用 |
 | DELETE | `/api/totp` | session + Passkey step-up + CSRF | 关闭 |
 | GET | `/api/sessions` | session | 列出中央 sessions |
@@ -761,7 +776,8 @@ TOTP_ACTIVE_KEY_VERSION=1
 - 无中央 session：App → auth Passkey → callback → 本地 session。
 - 有中央 session：第二 app 无 UI 提示完成 SSO。
 - 当前 app logout 不影响其他 app；中央 logout 后新 authorize 要求登录。
-- recovery TOTP → 注册新 Passkey；受限 recovery session 不能执行未授权功能。
+- TOTP 登录 → 建立中央 session → 注册新 Passkey；TOTP 会话不能执行需要 Passkey step-up 的操作。
+- Passkey 与 TOTP 两条登录路径在有 pending authorize transaction 时都能完成 SSO 回跳。
 - Safari/iPhone、Safari/macOS、Chrome/macOS 至少各完成真实设备测试；不依赖同步 Passkey。
 - Neon suspend 后冷启动体验；Vercel redeploy 后 session 仍有效（服务端持久化验证）。
 
@@ -776,8 +792,9 @@ TOTP_ACTIVE_KEY_VERSION=1
 
 - [ ] Admin 可在至少两台不同设备各注册独立 Passkey，并分别命名/revoke。
 - [ ] 无需 iCloud 同步，任一已注册设备可独立登录。
-- [ ] 正常登录只展示 Passkey；TOTP 仅在 recovery/bootstrap 流程出现。
+- [ ] `/login` 同时提供 Passkey 与动态码两个入口，任一方式都能登录并继续 pending authorize transaction。
 - [ ] 首次 TOTP bootstrap 成功注册首个 Passkey；失败/过期 token 不可重用。
+- [ ] 动态码登录后凭据管理类操作（改 TOTP、撤销 Passkey）仍要求 Passkey step-up。
 - [ ] 添加 Passkey 与修改 TOTP 均执行规定 step-up。
 - [ ] 三个后台均通过中央 authorize/code exchange 登录并建立独立 host-only session。
 - [ ] 浏览器 Cookie 中不存在 `Domain=.henriz.dev`；中央 Cookie 使用 `__Host-`。
