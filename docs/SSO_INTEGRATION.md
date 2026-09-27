@@ -201,9 +201,35 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
 ## 6. 登出与撤销
 
-- **退出当前 app**：只 revoke 该 app 的本地 session，不影响中央 session 和其他后台。
-- **中央退出**：用户需在 `https://auth.henriz.dev/security` 操作（`/api/logout` 需要中央站点的 CSRF Cookie，跨站调不到）。中央退出**不会**自动退出已登录的后台，所以 UI 文案不要承诺「退出所有设备」。
-- 需要立刻失效所有后台时：在 `/security` 撤销该 Admin 的中央 sessions（并递增 `sessionVersion`），然后各后台按自己的本地 TTL 过期，或做一次重新认证（授权时中央 session 已失效会重新要求登录）。
+- **只退出当前 app**：清掉本地 session，保留中央 session —— 下次访问会无感 SSO 直接回来。适合「切换账号」之外的普通场景。
+- **同时退出中央登录**（`Sign out` 按钮推荐这么做）：中央 session 的 Cookie 只属于 `auth.henriz.dev`，跨站 POST 调不到它的 `/api/logout`，必须把浏览器带过去：
+
+```ts
+// app/api/auth/logout/route.ts（app 侧）
+await clearLocalSession();
+const back = `${process.env.APP_ORIGIN}/login?loggedOut=1`; // 必须是已注册 client 的 origin
+return Response.json({
+  ok: true,
+  redirectTo: `${process.env.HENRIZ_AUTH_BASE_URL}/logout?redirect_uri=${encodeURIComponent(back)}`,
+});
+```
+
+```ts
+// 客户端按钮
+const { redirectTo } = await (await fetch("/api/auth/logout", { method: "POST" })).json();
+window.location.assign(redirectTo);
+```
+
+流程与约束：
+
+1. `GET /logout?redirect_uri=…` 只是确认页（GET 不改变状态，确认按钮走 POST + CSRF）；
+2. `redirect_uri` 只接受同源相对路径，或**已注册且 active 的 client 的 origin**，其它一律退回 auth 的 `/login`（不会变成开放重定向）；
+3. 确认后中央 session 被 revoke，浏览器 303 回到 `redirect_uri`。
+
+⚠️ **别让 app 的退出只清本地 Cookie**：如果 app 的登录页会自动跳 SSO（本文两种模式都建议自动跳），用户会立刻被静默签回，看起来像「退出失败」。所以回跳地址带上 `?loggedOut=1` 之类的标记，让登录页显示终态提示而不是再跳一次 SSO。
+
+- 中央退出**不会**自动使各后台已建立的本地 session 失效（没有 back-channel logout），所以 UI 文案不要承诺「退出所有设备」；本地 session 按各自 TTL 过期。
+- 需要立刻失效所有后台时：在 `/security` 撤销该 Admin 的中央 sessions（并递增 `sessionVersion`），各后台按本地 TTL 过期或做一次重新认证。
 - 高安全后台可以把本地 TTL 收短（例如 2h）。
 
 ## 7. 排错

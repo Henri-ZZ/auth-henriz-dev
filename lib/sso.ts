@@ -48,3 +48,25 @@ export async function finishPendingAuthorize(session: SessionWithAdmin): Promise
   const client = await db.client.findUniqueOrThrow({ where: { id: tx.clientId } });
   return issueCode({ clientId: client.clientId, clientDbId: client.id, redirectUri: tx.redirectUri, state: tx.state, codeChallenge: tx.codeChallenge }, session);
 }
+
+/**
+ * RP-initiated logout: after the central session is revoked the browser is sent
+ * back to the app that asked for it. Only same-origin relative paths, or an
+ * origin belonging to a registered active client, are accepted — everything
+ * else falls back to the auth login page instead of becoming an open redirect.
+ */
+export async function safePostLogoutRedirect(raw: string | null | undefined, fallback = "/login"): Promise<string> {
+  if (!raw) return fallback;
+  if (raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("\\")) return raw;
+  let url: URL;
+  try { url = new URL(raw); } catch { return fallback; }
+  if (url.protocol !== "https:" && url.hostname !== "localhost") return fallback;
+  const clients = await db.client.findMany({ where: { active: true }, select: { redirectUris: true } });
+  const origins = new Set<string>();
+  for (const client of clients) {
+    for (const uri of client.redirectUris) {
+      try { origins.add(new URL(uri).origin); } catch { /* ignore malformed rows */ }
+    }
+  }
+  return origins.has(url.origin) ? url.toString() : fallback;
+}

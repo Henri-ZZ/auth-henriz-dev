@@ -422,6 +422,7 @@ grant_type=authorization_code&code=...&redirect_uri=...&code_verifier=...
 
 - **退出当前应用**：仅 revoke/删除该 app 的本地 session，不影响中央 session 或其他 app。
 - **中央退出**：浏览器 POST `https://auth.henriz.dev/api/logout`（CSRF 防护）revoke 当前中央 session 并清中央 Cookie；已建立的 app sessions 默认继续有效，直至各自过期/退出。
+- **RP-initiated logout**：app 无法跨站调 `/api/logout`（中央 Cookie 只属于 auth origin），因此由 app 把浏览器带到 `GET https://auth.henriz.dev/logout?redirect_uri=<app 地址>`。该页只做确认渲染，确认按钮仍走 POST + CSRF；`redirect_uri` 仅接受同源相对路径或已注册 active client 的 origin，其它一律退回 `/login`，避免开放重定向。**若 app 的登录页会自动跳 SSO，退出后必须落到不自动跳转的终态**（例如 `?loggedOut=1`），否则用户会被静默签回。
 - **退出所有设备**：revoke Admin 所有中央 sessions；同时递增 `Admin.sessionVersion`。各 app 可在下次 SSO 或可选 back-channel revocation 时失效本地 session。
 - v1 若不实现可靠 back-channel logout，UI 必须明确说明“中央退出不会自动退出已打开的后台”。高安全 app 可用短本地 TTL，并定期调用受认证 introspection/revocation version endpoint。
 - Passkey revoke 默认不强制撤销所有 session；UI 提供勾选项。若因设备丢失而 revoke，应默认撤销全部中央 sessions。
@@ -601,7 +602,8 @@ model AuditLog {
 | DELETE | `/api/totp` | session + Passkey step-up + CSRF | 关闭 |
 | GET | `/api/sessions` | session | 列出中央 sessions |
 | POST | `/api/sessions/revoke` | session + step-up + CSRF | 撤销一个/全部 |
-| POST | `/api/logout` | session + CSRF | 中央退出 |
+| GET | `/logout` | 无 | RP-initiated logout 确认页，可带 `redirect_uri` |
+| POST | `/api/logout` | session + CSRF | 中央退出，可带 `?redirect_uri=` 回跳 |
 | GET | `/api/health` | 无 | 只返回 liveness，不泄露依赖详情 |
 
 所有 JSON/body 使用 Zod 等 runtime schema 严格解析、限制长度、拒绝未知字段（兼容字段另行版本化）。
