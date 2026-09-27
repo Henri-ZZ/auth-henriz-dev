@@ -36,6 +36,18 @@ ADMIN_TOTP_SECRET='<base32 secret or otpauth:// URI>' pnpm db:reset-totp   # kee
 
 Enroll the new seed in the authenticator app, sign in at `/login` or `/recovery`, then register two independent Passkeys in `/security`. Lost Passkeys **and** TOTP remain an offline, human-verified recovery (spec §14.3).
 
+## Clients and platform integration
+
+One client per platform, registered and rotated through the audited CLI — never hand-edit the database. `CLIENTS_JSON` in `db:seed` exists only for the very first bootstrap:
+
+```sh
+pnpm db:add-client --client-id licentra-admin --name "Licentra" --redirect https://licentra.henriz.dev/auth/callback
+pnpm db:add-client --list                                   # inspect, never prints secrets
+pnpm db:add-client --client-id licentra-admin --rotate      # 24h dual-secret grace window
+```
+
+Integration steps — the two supported patterns (pure back office with automatic redirect to the auth login page, vs. a public site that only protects `/admin` and bounces visitors to the homepage), the reusable server-only [`sdk/henriz-auth-client.ts`](sdk/henriz-auth-client.ts) module, local session rules and troubleshooting — are documented in [`docs/SSO_INTEGRATION.md`](docs/SSO_INTEGRATION.md).
+
 ## Checks
 
 ```sh

@@ -334,7 +334,7 @@ step-up 状态保存在服务端 session 中：`authMethod`、`authenticatedAt`�
 - Cookie 名：`__Host-henriz_auth`。
 - 属性：`Secure; HttpOnly; Path=/; SameSite=Lax`；不设置 `Domain`。`__Host-` 前缀保证 host-only + `/`。
 - 值为 32-byte CSPRNG opaque token（base64url）；数据库只存 `HMAC-SHA-256(SESSION_HASH_KEY, token)`。
-- 建议 idle TTL 12 小时、absolute TTL 7 天；每次有效使用更新 `lastSeenAt`，写放大可按 5 分钟节流。
+- idle TTL 24 小时、absolute TTL 7 天；每次有效使用更新 `lastSeenAt`，写放大可按 5 分钟节流。
 - 登录、step-up/recovery 升级、权限变化时 rotate token，防 session fixation。
 - `AuthSession` 保存 `authMethod`、`authenticatedAt`、`expiresAt`、`revokedAt` 和粗粒度 UA/IP hash；避免保存不必要个人数据。
 - logout 后清 Cookie 并在数据库 revoke；过期记录异步/每日清理。
@@ -354,8 +354,9 @@ step-up 状态保存在服务端 session 中：`authMethod`、`authenticatedAt`�
 - 独立 client secret，只在创建/轮换时显示一次；中央数据库只存 Argon2id hash（或 HMAC-SHA-256，因 secret 本身高熵）。
 - `redirectUris` 为精确 HTTPS URL 数组；生产禁止通配符、前缀匹配、用户提供 host、URL fragment 和非默认隐式端口差异。
 - 本地开发 redirect URI 单独 client；不要把 localhost 混入生产 client。
-- `active=false` 立即禁止 authorize/token；secret 支持双 key 短暂轮换窗口。
+- `active=false` 立即禁止 authorize/token；secret 支持双 key 短暂轮换窗口（`previousSecretHash` + `previousValidUntil`，默认 24 小时）。
 - 初始 clients：`edit-page-admin`、`licentra-admin`、`verbia-admin`。
+- 注册、改 `redirectUris`、启停、轮换 secret 统一通过受审计 CLI `pnpm db:add-client`（`--list` 只读查看，不打印 secret）；禁止手工改库。接入步骤与两种接入模式（纯后台跳转 / 官网 + 受保护 `/admin`）见 [`SSO_INTEGRATION.md`](./SSO_INTEGRATION.md)。
 
 ## 17. Authorization code flow
 
@@ -411,6 +412,9 @@ grant_type=authorization_code&code=...&redirect_uri=...&code_verifier=...
   "issued_at": 1790480012
 }
 ```
+
+- `auth_method` 必须来自中央 session 的实际记录（`passkey` / `totp` / `bootstrap`），不得写死。client 若按风险分级（例如 TOTP 登录的会话要求二次确认），依据该字段判断。
+- client secret 轮换有宽限期：校验顺序为当前 `secretHash`，其次在 `previousValidUntil` 未过期时校验 `previousSecretHash`。轮换流程 = 先由受审计 CLI 写入新 hash 与 24 小时宽限，再更新各 app 的 secret 并部署，窗口内新旧都可用；宽限期结束（或再次轮换）后旧 hash 自动失效。禁用 client（`active=false`）立即生效，无宽限期。
 
 - 响应不是标准 OAuth token；字段由内部 TypeScript contract 版本化，如 header `Henriz-Auth-Version: 1`。
 
@@ -728,7 +732,7 @@ TOTP_ACTIVE_KEY_VERSION=1
 
 ### Phase 0：准备
 
-- 抽取统一的 `henriz-auth-client` server-only 模块：生成 state/PKCE、authorize URL、callback 换码、建立本地 session。
+- 抽取统一的 `henriz-auth-client` server-only 模块：生成 state/PKCE、authorize URL、callback 换码、建立本地 session。实现已就绪：仓库根 `sdk/henriz-auth-client.ts`，复制到各 app 使用。
 - 每个 app 使用独立 client、callback 和 secret。
 - 保留现有登录作为 feature flag 下的 emergency fallback，但默认隐藏，并设定删除日期。
 

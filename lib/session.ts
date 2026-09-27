@@ -6,7 +6,7 @@ import { hmac, randomToken } from "@/lib/crypto";
 
 export const SESSION_COOKIE = "__Host-henriz_auth";
 const CSRF_COOKIE = "__Host-henriz_csrf";
-const idleMs = 12 * 60 * 60 * 1000;
+const idleMs = 24 * 60 * 60 * 1000;
 const absoluteMs = 7 * 24 * 60 * 60 * 1000;
 
 export type SessionWithAdmin = AuthSession & { admin: Admin };
