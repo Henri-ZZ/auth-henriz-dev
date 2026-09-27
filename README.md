@@ -5,7 +5,7 @@ Private, Passkey-first SSO for Henri Z administration apps. The implementation f
 ## Local setup
 
 1. Copy `.env.example` to `.env.local` and replace every placeholder with independent random values.
-2. Set `DIRECT_URL` for migrations and pooled `DATABASE_URL` for the app.
+2. Set Neon `DATABASE_URL_UNPOOLED` (or the alias `DIRECT_URL`) for migrations and pooled `DATABASE_URL` for the app. Prisma CLI reads these from `.env`; Next.js also reads `.env.local` at runtime.
 3. Run `pnpm db:deploy`, then the one-time bootstrap command below.
 4. Start with `pnpm dev` and open `https://localhost` through a trusted local HTTPS proxy, or use localhost's secure-context exception while keeping the `__Host-` cookies enabled.
 
