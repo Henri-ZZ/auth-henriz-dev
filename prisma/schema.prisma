@@ -1,0 +1,187 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AdminStatus {
+  BOOTSTRAP_REQUIRED
+  ACTIVE
+  DISABLED
+}
+
+enum AuthMethod {
+  PASSKEY
+  TOTP
+  BOOTSTRAP
+}
+
+enum ChallengeKind {
+  REGISTRATION
+  AUTHENTICATION
+  STEP_UP
+}
+
+model Admin {
+  id             String      @id @default(cuid())
+  webauthnUserId Bytes       @unique
+  displayName    String
+  status         AdminStatus @default(BOOTSTRAP_REQUIRED)
+  sessionVersion Int         @default(1)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  passkeys       PasskeyCredential[]
+  totp           TotpCredential?
+  sessions       AuthSession[]
+  codes          AuthorizationCode[]
+  challenges     WebAuthnChallenge[]
+  transactions   AuthorizationTransaction[]
+  auditLogs      AuditLog[]
+}
+
+model PasskeyCredential {
+  id           String   @id @default(cuid())
+  adminId      String
+  credentialId String   @unique
+  publicKey    Bytes
+  counter      BigInt   @default(0)
+  transports   String[]
+  deviceType   String?
+  backedUp     Boolean?
+  aaguid       String?
+  name         String
+  createdAt    DateTime @default(now())
+  lastUsedAt   DateTime?
+  revokedAt    DateTime?
+  admin        Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId, revokedAt])
+}
+
+model TotpCredential {
+  id               String   @id @default(cuid())
+  adminId          String   @unique
+  ciphertext       Bytes
+  nonce            Bytes
+  authTag          Bytes
+  keyVersion       Int
+  lastUsedTimeStep BigInt?
+  failedAttempts   Int      @default(0)
+  lockedUntil      DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  disabledAt       DateTime?
+  admin            Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+}
+
+model AuthSession {
+  id                String   @id @default(cuid())
+  adminId           String
+  tokenHash         Bytes    @unique
+  csrfTokenHash     Bytes
+  authMethod        AuthMethod
+  authenticatedAt   DateTime
+  stepUpAt          DateTime?
+  createdAt         DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+  idleExpiresAt     DateTime
+  absoluteExpiresAt DateTime
+  revokedAt         DateTime?
+  sessionVersion    Int
+  userAgentHash     Bytes?
+  ipPrefixHash      Bytes?
+  admin             Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  codes             AuthorizationCode[]
+
+  @@index([adminId, revokedAt])
+  @@index([idleExpiresAt])
+}
+
+model Client {
+  id                 String   @id @default(cuid())
+  clientId           String   @unique
+  name               String
+  secretHash         Bytes
+  previousSecretHash Bytes?
+  previousValidUntil DateTime?
+  redirectUris       String[]
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  codes              AuthorizationCode[]
+  transactions       AuthorizationTransaction[]
+}
+
+model AuthorizationTransaction {
+  id            String   @id @default(cuid())
+  browserTokenHash Bytes @unique
+  adminId       String?
+  clientId      String
+  redirectUri   String
+  state         String
+  codeChallenge String
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+  usedAt        DateTime?
+  admin         Admin?   @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt, usedAt])
+}
+
+model AuthorizationCode {
+  id                  String   @id @default(cuid())
+  codeHash            Bytes    @unique
+  adminId             String
+  clientId            String
+  authSessionId       String
+  redirectUri         String
+  codeChallenge       String
+  codeChallengeMethod String   @default("S256")
+  authTime            DateTime
+  createdAt           DateTime @default(now())
+  expiresAt           DateTime
+  usedAt              DateTime?
+  admin                Admin       @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  client               Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  authSession          AuthSession @relation(fields: [authSessionId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt, usedAt])
+}
+
+model WebAuthnChallenge {
+  id            String        @id @default(cuid())
+  adminId       String?
+  kind          ChallengeKind
+  hash          Bytes         @unique
+  transactionId String?
+  attempts      Int           @default(0)
+  createdAt     DateTime      @default(now())
+  expiresAt     DateTime
+  usedAt        DateTime?
+  admin         Admin?        @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt, usedAt])
+}
+
+model AuditLog {
+  id             BigInt   @id @default(autoincrement())
+  adminId        String?
+  event          String
+  outcome        String
+  actorSessionId String?
+  targetType     String?
+  targetId       String?
+  requestId      String?
+  ipPrefixHash   Bytes?
+  userAgentHash  Bytes?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  admin          Admin?   @relation(fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([adminId, createdAt])
+  @@index([event, createdAt])
+}
