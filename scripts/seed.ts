@@ -3,11 +3,17 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client.js";
 import { encryptAesGcm, hmac } from "../lib/crypto.js";
 
-const databaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+try {
+  process.loadEnvFile?.(".env");
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+}
+
+const databaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
 const totpSecret = process.env.ADMIN_TOTP_SECRET;
 const encryptionKey = process.env.TOTP_ENCRYPTION_KEY_V1;
 const authCodeKey = process.env.AUTH_CODE_HASH_KEY;
-if (!databaseUrl || !totpSecret || !encryptionKey || !authCodeKey) throw new Error("DIRECT_URL, ADMIN_TOTP_SECRET, TOTP_ENCRYPTION_KEY_V1 and AUTH_CODE_HASH_KEY are required");
+if (!databaseUrl || !totpSecret || !encryptionKey || !authCodeKey) throw new Error("DATABASE_URL_UNPOOLED (or DIRECT_URL), ADMIN_TOTP_SECRET, TOTP_ENCRYPTION_KEY_V1 and AUTH_CODE_HASH_KEY are required");
 
 const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl }) });
 try {
@@ -30,4 +36,3 @@ try {
   }
   console.log(`Created the single Admin and ${clients.length} client registration(s). Secrets were not printed.`);
 } finally { await db.$disconnect(); }
-

@@ -13,7 +13,7 @@ Generate keys with `openssl rand -base64 32`. Never commit them.
 
 ## One-time bootstrap
 
-Set `ADMIN_TOTP_SECRET` to the existing Base32 TOTP seed and optionally provide client registrations:
+Set `ADMIN_TOTP_SECRET` to the existing Base32 TOTP seed and optionally provide client registrations. The script automatically reads the other secrets from the project-root `.env` file:
 
 ```sh
 ADMIN_TOTP_SECRET='…' \

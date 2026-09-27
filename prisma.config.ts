@@ -1,5 +1,10 @@
-import "dotenv/config";
 import { defineConfig } from "prisma/config";
+
+try {
+  process.loadEnvFile?.(".env");
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+}
 
 const migrationUrl = process.env.DIRECT_URL ?? process.env.DATABASE_URL_UNPOOLED;
 
