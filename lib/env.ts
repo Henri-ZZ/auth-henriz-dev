@@ -20,7 +20,16 @@ export type Env = z.infer<typeof schema>;
 let cached: Env | undefined;
 
 export function env(): Env {
-  cached ??= schema.parse(process.env);
+  if (!cached) {
+    const parsed = schema.safeParse(process.env);
+    if (!parsed.success) {
+      const details = parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
+      // A plain Error, never a ZodError: misconfigured environment variables must not be
+      // reported to clients as an "invalid_request" payload error.
+      throw new Error(`Invalid environment configuration -> ${details}`);
+    }
+    cached = parsed.data;
+  }
   return cached;
 }
 

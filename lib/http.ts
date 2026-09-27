@@ -11,7 +11,10 @@ export function json(data: unknown, init: ResponseInit = {}) {
 }
 
 export function publicError(error: unknown) {
-  if (error instanceof ZodError) return json({ error: "invalid_request" }, { status: 400 });
+  if (error instanceof ZodError) {
+    console.error("Invalid request payload", error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.code}`).join(", "));
+    return json({ error: "invalid_request" }, { status: 400 });
+  }
   console.error("Authentication request failed", error instanceof Error ? error.message : "unknown error");
   return json({ error: "request_failed" }, { status: 400 });
 }
